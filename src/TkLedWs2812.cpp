@@ -10,6 +10,35 @@ TkLedWs2812::TkLedWs2812(led_info_t *led_info) : LedAdapter(led_info) {
 
 }
 
+bool TkLedWs2812::ledTaskCreate(uint32_t taskSize,int taskPriority )
+{
+    if(LedTaskHandle == NULL)
+    {
+         if(taskSize < 2048) taskSize = 2048; //至少任务的盏大小不能小于2K
+         if(taskPriority < 3) taskPriority = 3;//默认优先等级为3
+         if(xTaskCreate(TkLedWs2812::Led_Task, "Led_Task", taskSize , this, taskPriority, &LedTaskHandle)==true)
+         {
+            logInfo("creat led task ok ,LedTaskHandle:%d",LedTaskHandle);
+           
+            return true;
+         }
+         logInfo("creat led task failed ,LedTaskHandle:%d",LedTaskHandle);
+    } 
+    return false ;
+}
+bool TkLedWs2812::ledTaskDelete()
+{
+    if(LedTaskHandle != NULL)
+    {
+        vTaskDelete(LedTaskHandle);
+        logInfo("delete led task ,LedTaskHandle:%d",LedTaskHandle);
+        LedTaskHandle = NULL;
+        LedClear();
+        return true ;
+
+    }
+    return false;
+}
 bool TkLedWs2812::begin(){
 
     rmt_config_t config = RMT_DEFAULT_CONFIG_TX(tx_pin, tx_chn);
@@ -20,14 +49,14 @@ bool TkLedWs2812::begin(){
     ESP_ERROR_CHECK(rmt_driver_install(config.channel, 0, 0));
 
     // install ws2812 driver
-    strip_config = LED_STRIP_DEFAULT_CONFIG(nums, (led_strip_dev_t)config.channel);
+    strip_config = LED_STRIP_DEFAULT_CONFIG(nums, (led_ws2812_strip_dev_t)config.channel);
     strip = led_strip_new_ws2812(&strip_config);
     if (!strip) {
         logInfo( "install WS2812 driver failed");
     }
     // Clear LED strip (turn off all LEDs)
     ESP_ERROR_CHECK(strip->clear(strip, 100));
-    //xTaskCreate(TkLedWs2812::Led_Task, "Led_Task", 4096 , this, 4, NULL);
+   // xTaskCreate(TkLedWs2812::Led_Task, "Led_Task", 4096 , this, 4, &LedTaskHandle);
     // Show simple rainbow chasing pattern
     logInfo("install WS2812 driver ok !");
     return true;
@@ -47,7 +76,7 @@ bool TkLedWs2812::init() {
         _length = nums;
         begin();
         logInfo("led init ok ! \n");
-         return true;
+        return true;
     }
     else {
          logInfo("led init failed ! \n");
@@ -85,9 +114,12 @@ uint32_t TkLedWs2812::getLength() {
 void TkLedWs2812::sendPixel(uint32_t j ,uint8_t r, uint8_t g, uint8_t b) {
     // Neopixel wants colors in green then red then blue order
     strip->set_pixel(strip, j, r, g, b);
-    strip->refresh(strip, 100);
 }
 
+void TkLedWs2812::sendRefresh(void) {
+    // Neopixel wants colors in green then red then blue order
+    strip->refresh(strip, 100);
+}
 // Just wait long enough without sending any bots to cause the pixels to latch and display the last sent frame
 void TkLedWs2812::show() {
    // _delay_us((RES / 1000UL) + 1); // Round up since the delay must be _at_least_ this long (too short might not work, too long not a problem)
@@ -108,6 +140,7 @@ void TkLedWs2812::fill(TColor color) {
   for (uint32_t i = 0; i < _length; i++) {
       sendPixel(i,color.r, color.g, color.b);
   }
+  sendRefresh();
   sei();
   show();
 }
@@ -124,6 +157,7 @@ void TkLedWs2812::fill(TColor color, uint32_t pixelCount, bool fromTail) {
   for (uint32_t i = pixelsToSkip; i < (pixelsToSkip + pixelCount); i++) {
       sendPixel(i,color.r, color.g, color.b);
   }
+  sendRefresh();
   sei();
   show();
 }
@@ -141,67 +175,294 @@ void TkLedWs2812::fillPattern(LedPattern* pat, uint32_t shift) {
     for (uint32_t i = 0; i < _length; i++) {
       TColor color = cur->color();
       sendPixel(i,color.r, color.g, color.b);
-      //sendPixel(i,100, 0, 30);
       cur = cur->nextLooped(first);
       logInfo("led set,i:%d,r:%d,g:%d,b:%d\n",i,color.r,color.g,color.b);
     }
+    sendRefresh();
     sei();
     show();
+}
+
+/**
+ * HSV(Hue, Saturation, Value) 模型中，颜色的参数分别是：色调(H)，饱和度(S)，明度(V)。它更类似于人类感觉颜色的方式，
+ * 颜色？深浅？明暗？通过这种方式可以很直观的改变渲染效果。
+ * @brief 将HSV颜色空间转换为RGB颜色空间
+ *      - 因为HSV使用起来更加直观、方便，所以代码逻辑部分使用HSV。但WS2812B RGB-LED灯珠的驱动使用的是RGB，所以需要转换。
+ * 
+ * @param  h HSV颜色空间的H：色调。单位°，范围0~360。（Hue 调整颜色，0°-红色，120°-绿色，240°-蓝色，以此类推）
+ * @param  s HSV颜色空间的S：饱和度。单位%，范围0~100。（Saturation 饱和度高，颜色深而艳；饱和度低，颜色浅而发白）
+ * @param  v HSV颜色空间的V：明度。单位%，范围0~100。（Value 控制明暗，明度越高亮度越亮，越低亮度越低）
+ * @param  r RGB-R值的指针
+ * @param  g RGB-G值的指针
+ * @param  b RGB-B值的指针
+ *
+ * Wiki: https://en.wikipedia.org/wiki/HSL_and_HSV
+ * https://blog.csdn.net/Mark_md/article/details/115132435
+ * https://blog.csdn.net/qq_51985653/article/details/113392665
+ */
+
+void led_strip_hsv2rgb(uint32_t h, uint32_t s, uint32_t v, uint32_t *r, uint32_t *g, uint32_t *b)
+{
+    h %= 360; // h -> [0,360]
+    uint32_t rgb_max = v * 2.55f;
+    uint32_t rgb_min = rgb_max * (100 - s) / 100.0f;
+
+    uint32_t i = h / 60;
+    uint32_t diff = h % 60;
+
+    // RGB adjustment amount by hue
+    uint32_t rgb_adj = (rgb_max - rgb_min) * diff / 60;
+
+    switch (i) {
+    case 0:
+        *r = rgb_max;
+        *g = rgb_min + rgb_adj;
+        *b = rgb_min;
+        break;
+    case 1:
+        *r = rgb_max - rgb_adj;
+        *g = rgb_max;
+        *b = rgb_min;
+        break;
+    case 2:
+        *r = rgb_min;
+        *g = rgb_max;
+        *b = rgb_min + rgb_adj;
+        break;
+    case 3:
+        *r = rgb_min;
+        *g = rgb_max - rgb_adj;
+        *b = rgb_max;
+        break;
+    case 4:
+        *r = rgb_min + rgb_adj;
+        *g = rgb_min;
+        *b = rgb_max;
+        break;
+    default:
+        *r = rgb_max;
+        *g = rgb_min;
+        *b = rgb_max - rgb_adj;
+        break;
+    }
+}
+//
+uint8_t TkLedWs2812::setLedMode(uint8_t mode)
+{
+   LedMode = mode;
+   return 1;
+}
+//
+uint8_t TkLedWs2812::setLedColor(TColor color)
+{
+   SetClolor = color;
+   return 1;
+}
+//
+uint8_t TkLedWs2812::setLedColorLight(uint8_t bright)
+{
+   LedBright = bright;
+   return 1;
+}
+//
+uint8_t TkLedWs2812::getLedMode(void)
+{
+     return LedMode;
+}
+//
+TColor TkLedWs2812::getLedColor(void)
+{
+   return SetClolor;
+}
+//
+uint8_t TkLedWs2812::getLedColorLight(void)
+{
+    return LedBright;
+}
+void TkLedWs2812::setLedConfig(uint8_t mode,uint8_t bright,TColor color)
+{
+   setLedMode(mode);
+   setLedColorLight(bright);
+   setLedColor(color);
+  // reset_led_time();
+}
+//清屏
+void TkLedWs2812::LedClear(void)
+{      
+        strip->clear(strip,50);
+        vTaskDelay(pdMS_TO_TICKS(1));
+}
+//单色
+void TkLedWs2812::LedOneColor(TColor color)
+{
+    for (uint32_t j = 0; j < _length; j ++) {
+        strip->set_pixel(strip, j, color.r, color.g, color.b);
+    }
+    strip->refresh(strip, 100);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    //logDebug("LedOneColor,red:%d,green:%d,blue:%",red,green,blue);
+}
+
+//三色循环
+void TkLedWs2812::LedThreeColor(TColor color)
+{
+    for (uint32_t j = 0; j < _length; j ++) {
+        if(j<2) 
+        strip->set_pixel(strip, j, color.r, 0, 0);
+        else if(j<4)
+        strip->set_pixel(strip, j, 0, color.g, 0);
+        else if(j<6)
+            strip->set_pixel(strip, j, 0, 0, color.b);
+    }
+    strip->refresh(strip, 100);
+    vTaskDelay(pdMS_TO_TICKS(10));
+}
+
+// @description: 一个一个逐渐亮起 * @param {type} * @return: 
+void TkLedWs2812::LedOneByOne(TColor color,uint32_t time)
+{
+    uint32_t red = 0;
+    uint32_t green = 0;
+    uint32_t blue = 0;
+    uint16_t hue = 0;
+    uint16_t start_rgb = 0;
+    for (uint32_t j = 0; j < _length; j++){
+        // Build RGB values
+        hue = j * 360 / nums + start_rgb;
+        led_strip_hsv2rgb(hue, 100, 30, &red, &green, &blue);
+        // Write RGB values to strip driver
+        strip->set_pixel(strip, j, red, green, blue);
+        strip->refresh(strip, 100);
+        vTaskDelay(pdMS_TO_TICKS(time));
+    }
+    strip->clear(strip, 50);
+    vTaskDelay(pdMS_TO_TICKS(time));
+    
+}
+
+//呼吸灯效果
+void TkLedWs2812::LedbreathColor(TColor color)
+{
+    uint32_t red = 0;
+    uint32_t green = 0;
+    uint32_t blue = 0;
+    uint32_t color_V_MAX = 100;
+    uint32_t count_v = 0;  
+    bool plus = true ;
+
+    red   = color.r;
+    green = color.g;
+    blue  = color.b;
+
+    if(plus == true){//吸
+        if(count_v < color_V_MAX){
+            count_v+=1;
+        }
+        else {
+            plus = false ;
+            //呼吸转换的时候加一个停顿，模拟人的呼吸效果
+            vTaskDelay(pdMS_TO_TICKS(10*50));
+        }
+    }
+    else{//呼
+        if(count_v > 1){
+            count_v-=1;
+        }
+        else{
+            plus = true ;
+            //呼吸转换的时候加一个停顿，模拟人的呼吸效果
+            vTaskDelay(pdMS_TO_TICKS(10*50));
+        }
+    }
+    //调亮度
+    if(red>0){
+        red = count_v *  2.55f ;
+    }
+    if(green>0){
+        green = count_v *  2.55f ;
+    }
+    if(blue>0){
+        blue = count_v*  2.55f ;
+    }
+    for (uint32_t j = 0; j < _length; j ++) {
+        strip->set_pixel(strip, j,red,green,blue);
+    }
+    strip->refresh(strip, 100);
+    vTaskDelay(pdMS_TO_TICKS(10*3));
+
+}
+
+//彩虹效果
+//@description: 彩虹效果 * @param {type} * @return: 
+void TkLedWs2812::LedRanbow(uint32_t time,uint8_t V)
+{
+    uint32_t red = 0;
+    uint32_t green = 0;
+    uint32_t blue = 0;
+    uint16_t hue = 0;
+    uint16_t start_rgb = 0;
+
+    for (int i = 0; i < 3; i++){
+        for (int j = i; j < nums; j += 3){
+            // Build RGB values
+            hue = j * 360 / nums + start_rgb;
+            led_strip_hsv2rgb(hue, 100, V, &red, &green, &blue);
+            // Write RGB values to strip driver
+            strip->set_pixel(strip, j, red, green, blue);
+        }
+        // Flush RGB values to LEDs
+        strip->refresh(strip, 100);
+        vTaskDelay(pdMS_TO_TICKS(time));
+        strip->clear(strip, 50);
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    start_rgb += 60;
+    // logDebug("rgb test,j:%d",j);
 }
 // led task
 void TkLedWs2812::Led_Task(void *arg) 
 {
-    while(1){
-        vTaskDelay(pdMS_TO_TICKS(20));
-    }
-     vTaskDelete(NULL);
-     #if 0
+    TkLedWs2812 *self = (TkLedWs2812*) arg;
     uint8_t ret ;
-	printf("Led_Task ok !\n\n");
-     uint32_t red = 0;
-    uint32_t green = 0;
-    uint32_t blue = 0;
-    uint16_t hue = 0;
-    uint32_t color = 0;
-    uint16_t LED_NUMBER = 0;
-    uint32_t  color_v = 0;   
+    uint8_t mode = 0;
+    uint8_t bright = 0;
+    TColor color ;
+
+	logInfo("Led_Task ok !\n\n");
 
     while(true)
-    {
-        color = get_led_color();
-        Led_mode = get_led_mode();
-        color_v = get_led_color_v();
+    {   
+        mode =  self->getLedMode();
+        color = self->getLedColor();
+        bright = self->getLedColorLight();
 
-        red   = (color >> 16) & 0x0000ff;
-        green = (color >> 8)  & 0x0000ff;
-        blue  = (color >> 0)  & 0x0000ff;
-        switch(Led_mode)
+        switch(mode)
         {
-            case 0: //单色
+            case SINGLE_COLOR_MODE: //单色
                 {
-                    LedOneColor(strip, nums,red,green,blue);
+                    self->LedOneColor(color);
                 }break;
-            case 1://三色
+            case THREE_COLOR_MODE://三色
                 {
-                        LedThreeColor(strip,LED_NUMBER,color_v,255,255,255);
+                    self->LedThreeColor(color);
                 }break;
-            case 2://逐渐亮
+            case ONEBYONE_COLOR_MODE://逐渐亮
                 {
-                    LedOneByOne(strip,LED_NUMBER,50,50);
+                    self->LedOneByOne(color,30);
                 }break;
-            case 3://呼吸灯效果
+            case BREATH_COLOR_MODE://呼吸灯效果
                 {
-                    LedbreathColor(strip ,LED_NUMBER,color_v,red,green,blue);  
+                    self->LedbreathColor(color);
                 }break; 
-            case 4://彩虹
+            case RANBOW_COLOR_MODE://彩虹
                 {
-                    LedRanbow(strip,LED_NUMBER,color_v,500);
+                    self->LedRanbow(30,bright);
                 }break;
-                default : LedClear(strip);
+
+                default : self->LedClear();
         }
-        vTaskDelay(pdMS_TO_TICKS(20));
-    }
-    
+        vTaskDelay(pdMS_TO_TICKS(30));
+    }    
     vTaskDelete(NULL);
-    #endif
+
 }
