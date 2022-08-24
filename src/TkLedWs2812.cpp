@@ -264,6 +264,11 @@ uint8_t TkLedWs2812::setLedColorLight(uint8_t bright)
    LedBright = bright;
    return 1;
 }
+uint8_t TkLedWs2812::setLedDelayTime(uint32_t delaytime)
+{
+   LedDelayTime = delaytime;
+   return 1;
+}
 //
 uint8_t TkLedWs2812::getLedMode(void)
 {
@@ -279,18 +284,27 @@ uint8_t TkLedWs2812::getLedColorLight(void)
 {
     return LedBright;
 }
-void TkLedWs2812::setLedConfig(uint8_t mode,uint8_t bright,TColor color)
+uint32_t TkLedWs2812::getLedDelayTime(void)
+{
+    return LedDelayTime;
+}
+void TkLedWs2812::setLedConfig(uint8_t mode,uint8_t bright,uint32_t delaytime,TColor color)
 {
    setLedMode(mode);
    setLedColorLight(bright);
    setLedColor(color);
+   setLedDelayTime(delaytime);
   // reset_led_time();
 }
 //清屏
 void TkLedWs2812::LedClear(void)
 {      
-        strip->clear(strip,50);
-        vTaskDelay(pdMS_TO_TICKS(1));
+        //strip->clear(strip,50);
+    for (uint32_t j = 0; j < _length; j ++) {
+        strip->set_pixel(strip, j,0,0,0);
+    }
+    strip->refresh(strip, 100);
+    vTaskDelay(pdMS_TO_TICKS(1));
 }
 //单色
 void TkLedWs2812::LedOneColor(TColor color)
@@ -326,29 +340,44 @@ void TkLedWs2812::LedOneByOne(TColor color,uint32_t time)
     uint32_t blue = 0;
     uint16_t hue = 0;
     uint16_t start_rgb = 0;
-    for (uint32_t j = 0; j < _length; j++){
+    static uint8_t offset = 0;
+
+     for (int j = 0; j < _length; j++){
         // Build RGB values
-        hue = j * 360 / nums + start_rgb;
-        led_strip_hsv2rgb(hue, 100, 30, &red, &green, &blue);
+        red =  onebyonevalue[offset][start_rgb];
+        green = onebyonevalue[offset][start_rgb+1];
+        blue = onebyonevalue[offset][start_rgb+2];
+        start_rgb += 3;//每次取3个数值
+        // hue = j * 360 / nums + start_rgb;
+        // led_strip_hsv2rgb(hue, 100, color_v, &red, &green, &blue);
         // Write RGB values to strip driver
         strip->set_pixel(strip, j, red, green, blue);
+        //logInfo("Led One By One,offset:%d,j:%d,r:%d,g:%d,b:%d\n\n",offset,j,red,green,blue);
         strip->refresh(strip, 100);
-        vTaskDelay(pdMS_TO_TICKS(time));
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
-    strip->clear(strip, 50);
+    //strip->refresh(strip, 100);
     vTaskDelay(pdMS_TO_TICKS(time));
-    
+    //strip->clear(strip, 100);
+    //LedClear();
+    if(offset < (_length-1)){
+        offset ++;
+    }
+    else{
+        offset = 0;
+    }
+     vTaskDelay(pdMS_TO_TICKS(1));
 }
 
 //呼吸灯效果
-void TkLedWs2812::LedbreathColor(TColor color)
+void TkLedWs2812::LedBreathColor(TColor color,uint32_t time)
 {
     uint32_t red = 0;
     uint32_t green = 0;
     uint32_t blue = 0;
-    uint32_t color_V_MAX = 100;
-    uint32_t count_v = 0;  
-    bool plus = true ;
+    uint32_t color_V_MAX = 70;
+    static uint32_t count_v = 0;  
+    static bool plus = true ;
 
     red   = color.r;
     green = color.g;
@@ -361,7 +390,7 @@ void TkLedWs2812::LedbreathColor(TColor color)
         else {
             plus = false ;
             //呼吸转换的时候加一个停顿，模拟人的呼吸效果
-            vTaskDelay(pdMS_TO_TICKS(10*50));
+            vTaskDelay(pdMS_TO_TICKS(time));
         }
     }
     else{//呼
@@ -371,29 +400,28 @@ void TkLedWs2812::LedbreathColor(TColor color)
         else{
             plus = true ;
             //呼吸转换的时候加一个停顿，模拟人的呼吸效果
-            vTaskDelay(pdMS_TO_TICKS(10*50));
+            vTaskDelay(pdMS_TO_TICKS(time));
         }
     }
-    //调亮度
-    if(red>0){
-        red = count_v *  2.55f ;
+    //调亮度,亮度控制在50以内
+    if( color.r>0){
+        red = count_v * 0.5f ;
     }
-    if(green>0){
-        green = count_v *  2.55f ;
+    if(color.g>0){
+        green = count_v * 0.5f ;
     }
-    if(blue>0){
-        blue = count_v*  2.55f ;
+    if(color.b>0){
+        blue = count_v* 0.5f ;
     }
     for (uint32_t j = 0; j < _length; j ++) {
         strip->set_pixel(strip, j,red,green,blue);
     }
+    //logInfo("LedbreathColor,count_v:%d,red:%d,green:%d,blue:%d,\n\n",count_v,red,green,blue);
     strip->refresh(strip, 100);
-    vTaskDelay(pdMS_TO_TICKS(10*3));
-
+    vTaskDelay(pdMS_TO_TICKS(1));
 }
-
 //彩虹效果
-//@description: 彩虹效果 * @param {type} * @return: 
+//@description: 彩虹效果 * @param {type} * @return:
 void TkLedWs2812::LedRanbow(uint32_t time,uint8_t V)
 {
     uint32_t red = 0;
@@ -419,6 +447,155 @@ void TkLedWs2812::LedRanbow(uint32_t time,uint8_t V)
     start_rgb += 60;
     // logDebug("rgb test,j:%d",j);
 }
+//单色起伏
+void TkLedWs2812::LedUpAndDownColor(TColor color,uint32_t time)
+{
+    uint32_t red = 0;
+    uint32_t green = 0;
+    uint32_t blue = 0;
+    static uint8_t offset = 0;
+
+    for (uint8_t j = 0,i = (_length - 1); j < _length; j ++,i--){
+
+        if(j == offset){
+            red = color.r;
+            green = color.g;
+            blue = color.b;
+        }
+        else{
+            red = color.r * 0.3f;
+            green = color.g * 0.3f;
+            blue = color.b * 0.3f;
+        }
+        // Write RGB values to strip driver
+        strip->set_pixel(strip, i, red, green, blue);
+        //logInfo("LedFirewareUpdate,offset:%d,j:%d,r:%d,g:%d,b:%d\n\n",offset,j,red,green,blue);
+    }
+    strip->refresh(strip, 100);
+    //vTaskDelay(pdMS_TO_TICKS(time));
+    if(offset < (_length-1 )){
+        offset ++ ;
+    }
+    else{
+        offset = 0;        
+    }
+    vTaskDelay(pdMS_TO_TICKS(time));
+}
+//蓝牙连接
+//state : 0 连接中，1 连接成功；
+//@description: 连接中循环旋转，如果连接成功停止旋转，蓝灯常亮 * @param {type} * @return:
+void TkLedWs2812::LedBluetoothConnect(TColor color,uint32_t time,uint8_t state)
+{
+    uint32_t red = 0;
+    uint32_t green = 0;
+    uint32_t blue = 0;
+    static uint8_t offset = 0;
+
+    for (uint8_t j = 0,i = (_length - 1); j < _length; j ++,i--){
+
+        if(state == 0)//未连接
+        {
+            if(j < offset){
+                red = color.r;
+                green = color.g;
+                blue = color.b;
+            }
+            else{
+                red =  0;
+                green = 0;
+                blue = 0;
+            }
+        }
+        else{//已连接
+            red = color.r;
+            green = color.g;
+            blue = color.b;
+        }
+        // Write RGB values to strip driver
+        strip->set_pixel(strip, i, red, green, blue);
+        //logInfo("LedFirewareUpdate,offset:%d,j:%d,r:%d,g:%d,b:%d\n\n",offset,j,red,green,blue);
+    }
+    strip->refresh(strip, 100);
+    //vTaskDelay(pdMS_TO_TICKS(time));
+    if(offset < (_length )){
+        offset ++ ;
+    }
+    else{
+        offset = 0;
+        LedClear();
+    }
+    vTaskDelay(pdMS_TO_TICKS(time));
+}
+//固件升级
+//@description: 单色旋转效果 * @param {type} * @return:
+void TkLedWs2812::LedFirewareUpdate(TColor color,uint32_t time)
+{
+    uint32_t red = 0;
+    uint32_t green = 0;
+    uint32_t blue = 0;
+    static uint8_t offset = (_length -1);
+   
+    for (uint8_t j = (_length -1); j > 0 ; j --){
+        if(j==offset){
+            red = color.r;
+            green = color.g;
+            blue = color.b;
+        }
+        else{
+            red =  0;
+            green = 0;
+            blue = 0;
+        }
+        // Write RGB values to strip driver
+        strip->set_pixel(strip, j, red, green, blue);
+        //logInfo("LedFirewareUpdate,offset:%d,j:%d,r:%d,g:%d,b:%d\n\n",offset,j,red,green,blue);
+    }
+    strip->refresh(strip, 100);
+    //vTaskDelay(pdMS_TO_TICKS(time));
+    if(offset > (1 )){
+        offset -- ;
+    }
+    else{
+        offset = (_length - 1);
+    }   
+    vTaskDelay(pdMS_TO_TICKS(time));
+
+}
+//饮水提醒
+//@description: 追逐效果 * @param {type} * @return:
+void TkLedWs2812::LedDrinkWaterAlarm(uint32_t time)
+{
+    uint32_t red = 0;
+    uint32_t green = 0;
+    uint32_t blue = 0;
+    uint16_t hue = 0;
+    uint16_t start_rgb = 0;
+    static uint8_t offset = 0;
+
+     for (int j = 0; j < _length; j++){
+        // Build RGB values
+        red =  alarmvalue[offset][start_rgb];
+        green = alarmvalue[offset][start_rgb+1];
+        blue = alarmvalue[offset][start_rgb+2];
+        start_rgb += 3;//每次取3个数值
+        strip->set_pixel(strip, j, red, green, blue);
+        //logInfo("Led One By One,offset:%d,j:%d,r:%d,g:%d,b:%d\n\n",offset,j,red,green,blue);
+        strip->refresh(strip, 100);
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    //strip->refresh(strip, 100);
+    vTaskDelay(pdMS_TO_TICKS(time));
+    //strip->clear(strip, 100);
+    //LedClear();
+    if(offset < (_length-1)){
+        offset ++;
+    }
+    else{
+        offset = 0;
+    }
+     vTaskDelay(pdMS_TO_TICKS(1));
+   
+}
 // led task
 void TkLedWs2812::Led_Task(void *arg) 
 {
@@ -426,8 +603,9 @@ void TkLedWs2812::Led_Task(void *arg)
     uint8_t ret ;
     uint8_t mode = 0;
     uint8_t bright = 0;
+    uint32_t delaytime = 0;
     TColor color ;
-
+    static uint8_t old_mode = 0;
 	logInfo("Led_Task ok !\n\n");
 
     while(true)
@@ -435,33 +613,63 @@ void TkLedWs2812::Led_Task(void *arg)
         mode =  self->getLedMode();
         color = self->getLedColor();
         bright = self->getLedColorLight();
+        delaytime = self->getLedDelayTime();
 
+        if(old_mode != mode)
+        {
+            logInfo("Led mode changed,mode:%d\n\n",mode);
+            old_mode = mode ;
+        }
         switch(mode)
         {
-            case SINGLE_COLOR_MODE: //单色
+            case SINGLE_COLOR_MODE: //单色  0
                 {
                     self->LedOneColor(color);
                 }break;
-            case THREE_COLOR_MODE://三色
+            case THREE_COLOR_MODE://三色  1
                 {
                     self->LedThreeColor(color);
                 }break;
-            case ONEBYONE_COLOR_MODE://逐渐亮
+            case ONEBYONE_COLOR_MODE://追逐  2
                 {
-                    self->LedOneByOne(color,30);
+                    self->LedOneByOne(color,delaytime);//delaytime:100
                 }break;
-            case BREATH_COLOR_MODE://呼吸灯效果
+            case BREATH_COLOR_MODE://呼吸灯效果  3
                 {
-                    self->LedbreathColor(color);
+                    self->LedBreathColor(color,delaytime);//delaytime：20
                 }break; 
-            case RANBOW_COLOR_MODE://彩虹
+            case RANBOW_COLOR_MODE://彩虹  4
                 {
-                    self->LedRanbow(30,bright);
+                    self->LedRanbow(delaytime,bright);//delaytime:30
+                }break;
+            case UPS_DOWN_MODE://单色起伏  5,R:0,G:50,B:0
+                {
+                    self->LedUpAndDownColor(color,delaytime);//delaytime:300
+                }break;
+            case BLUETOOTH_CONNECTING_MODE://蓝牙连接  6 ,R:0,G:0,B:50
+                {
+                    self->LedBluetoothConnect(color,delaytime,0);//delaytime: 200
+                }break;
+            case BLUETOOTH_CONNECTED_MODE://蓝牙连接  7 ,R:0,G:0,B:50
+                {
+                    self->LedBluetoothConnect(color,delaytime,1);//delaytime:200
+                }break;
+            case FIREWARE_UPDATE_MODE://固件升级  8 ,R:0,G:50,B:20
+                {
+                    self->LedFirewareUpdate(color,delaytime);//delaytime :200
+                }break;
+            case DRINKWATER_REMIN_MODE://喝水达标  9
+                {
+                    self->LedOneByOne(color,delaytime);  //delaytime:100
+                }break;
+            case DRINKWATER_ALARM_MODE://喝水提醒  10 //R:0,G:50,B:20
+                {
+                    self->LedDrinkWaterAlarm(delaytime);//delaytime:30
                 }break;
 
                 default : self->LedClear();
         }
-        vTaskDelay(pdMS_TO_TICKS(30));
+        vTaskDelay(pdMS_TO_TICKS(10));
     }    
     vTaskDelete(NULL);
 
